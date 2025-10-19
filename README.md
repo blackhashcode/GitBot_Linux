@@ -217,10 +217,6 @@ View operation logs:
 tail -f ~/.git-bot/git-bot.log
 ```
 
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
 ### Development Setup
 ```bash
 git clone https://github.com/yourusername/git-bot.git
@@ -229,23 +225,7 @@ cd git-bot
 ```
 
 ### Reporting Issues
-Please report bugs and feature requests on our [GitHub Issues](https://github.com/yourusername/git-bot/issues) page.
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- Built with pure Bash for maximum compatibility
-- Inspired by the need for simpler Git workflows
-- Thanks to all contributors and testers
-
-## 📞 Support
-
-- 📧 Email: support@gitbot.com
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/git-bot/issues)
-- 📚 Documentation: [GitBot Wiki](https://github.com/yourusername/git-bot/wiki)
+- If you believe that there are changes required to be made, please reach out to me via mail: tausifmushtaque@gmail.com
 
 ---
 
