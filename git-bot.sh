@@ -53,6 +53,86 @@ is_git_repo() {
     git rev-parse --git-dir > /dev/null 2>&1
 }
 
+# Find all git repositories in a directory
+find_git_repos() {
+    local search_dir="${1:-.}"
+    local repos=()
+    
+    print_color $CYAN "🔍 Searching for Git repositories in: $search_dir"
+    
+    while IFS= read -r -d '' repo; do
+        repos+=("$repo")
+    done < <(find "$search_dir" -name ".git" -type d 2>/dev/null | sed 's/\/.git$//' | tr '\n' '\0')
+    
+    if [[ ${#repos[@]} -eq 0 ]]; then
+        print_color $YELLOW "📭 No Git repositories found in: $search_dir"
+        return 1
+    fi
+    
+    print_color $GREEN "📁 Found ${#repos[@]} Git repositories:"
+    for i in "${!repos[@]}"; do
+        local repo_name=$(basename "${repos[$i]}")
+        local repo_path=$(dirname "${repos[$i]}")
+        printf "%2d) %s - %s\n" $((i+1)) "$repo_name" "${repos[$i]}"
+    done
+    
+    return 0
+}
+
+# Navigate to git repository
+navigate_to_repo() {
+    print_color $CYAN "📁 Repository Navigation"
+    echo "1) Browse current directory for Git repos"
+    echo "2) Enter specific directory path"
+    echo "3) Go to parent directory"
+    echo "4) Show current directory"
+    read -p "Choose option (1-4): " nav_choice
+
+    case $nav_choice in
+        1)
+            if find_git_repos "."; then
+                read -p "Enter repository number to navigate: " repo_num
+                local repos=($(find "." -name ".git" -type d 2>/dev/null | sed 's/\/.git$//'))
+                if [[ $repo_num -gt 0 && $repo_num -le ${#repos[@]} ]]; then
+                    cd "${repos[$((repo_num-1))]}"
+                    print_color $GREEN "✅ Navigated to: $(pwd)"
+                else
+                    print_color $RED "❌ Invalid repository number"
+                fi
+            fi
+            ;;
+        2)
+            read -p "Enter directory path: " dir_path
+            if [[ -d "$dir_path" ]]; then
+                cd "$dir_path"
+                print_color $GREEN "✅ Navigated to: $(pwd)"
+                
+                if is_git_repo; then
+                    print_color $GREEN "🎉 Found Git repository!"
+                else
+                    print_color $YELLOW "📭 Current directory is not a Git repository"
+                    read -p "Search for Git repositories here? (y/n): " search_here
+                    if [[ $search_here == "y" ]]; then
+                        find_git_repos "."
+                    fi
+                fi
+            else
+                print_color $RED "❌ Directory not found: $dir_path"
+            fi
+            ;;
+        3)
+            cd ..
+            print_color $GREEN "✅ Moved to parent directory: $(pwd)"
+            ;;
+        4)
+            print_color $CYAN "📂 Current directory: $(pwd)"
+            ;;
+        *)
+            print_color $RED "❌ Invalid choice"
+            ;;
+    esac
+}
+
 # Check for existing .gitignore file
 has_gitignore() {
     [[ -f ".gitignore" ]]
@@ -219,7 +299,7 @@ init_new_repo() {
     fi
 }
 
-# Check for changes in repository
+# Check for changes in repository - FIXED VERSION
 check_changes() {
     if ! is_git_repo; then
         print_color $RED "❌ Not a Git repository"
@@ -227,24 +307,130 @@ check_changes() {
     fi
 
     local changes=0
-    if [[ -n $(git status --porcelain) ]]; then
+    local status_output=$(git status --porcelain)
+    
+    if [[ -n "$status_output" ]]; then
         print_color $YELLOW "📋 Changes detected:"
         git status --short
         changes=1
+        
+        # Show detailed change information
+        echo ""
+        print_color $CYAN "📊 Detailed change summary:"
+        local untracked=$(git status --porcelain | grep -c '^??')
+        local modified=$(git status --porcelain | grep -c '^ M')
+        local added=$(git status --porcelain | grep -c '^A ')
+        local deleted=$(git status --porcelain | grep -c '^ D')
+        
+        [[ $untracked -gt 0 ]] && echo "❓ Untracked files: $untracked"
+        [[ $modified -gt 0 ]] && echo "📝 Modified files: $modified"
+        [[ $added -gt 0 ]] && echo "✅ Added files: $added"
+        [[ $deleted -gt 0 ]] && echo "🗑️  Deleted files: $deleted"
     else
         print_color $GREEN "✅ No changes detected"
         changes=0
     fi
     
-    local ahead=$(git rev-list --count HEAD..origin/$(git branch --show-current) 2>/dev/null || echo "0")
-    local behind=$(git rev-list --count origin/$(git branch --show-current)..HEAD 2>/dev/null || echo "0")
+    # Check branch status
+    local current_branch=$(git branch --show-current)
+    local remote_branch=$(git for-each-ref --format='%(upstream:short)' "$(git symbolic-ref -q HEAD)" 2>/dev/null)
     
-    if [[ $ahead -gt 0 ]] || [[ $behind -gt 0 ]]; then
-        print_color $CYAN "📊 Branch status: Ahead by $ahead, Behind by $behind"
-        changes=1
+    if [[ -n "$remote_branch" ]]; then
+        local ahead=$(git rev-list --count "$remote_branch"..HEAD 2>/dev/null || echo "0")
+        local behind=$(git rev-list --count HEAD.."$remote_branch" 2>/dev/null || echo "0")
+        
+        if [[ $ahead -gt 0 ]] || [[ $behind -gt 0 ]]; then
+            print_color $CYAN "📊 Branch '$current_branch' is ahead by $ahead, behind by $behind compared to '$remote_branch'"
+            changes=1
+        fi
     fi
     
     return $changes
+}
+
+# FIXED: Smart commit that properly adds ALL changes
+smart_commit() {
+    if ! is_git_repo; then
+        print_color $RED "❌ Not a Git repository"
+        return 1
+    fi
+
+    # Show changes first
+    print_color $YELLOW "📋 Current changes:"
+    git status --short
+    
+    # Count different types of changes
+    local untracked_count=$(git ls-files --others --exclude-standard | wc -l)
+    local modified_count=$(git diff --name-only | wc -l)
+    local staged_count=$(git diff --cached --name-only | wc -l)
+    
+    echo ""
+    print_color $CYAN "📊 Change summary:"
+    echo "❓ Untracked files: $untracked_count"
+    echo "📝 Modified files: $modified_count"
+    echo "✅ Staged files: $staged_count"
+    
+    if [[ $untracked_count -eq 0 && $modified_count -eq 0 && $staged_count -eq 0 ]]; then
+        print_color $YELLOW "⚠️  No changes to commit"
+        return 0
+    fi
+    
+    # Add all changes (including untracked files)
+    print_color $BLUE "📦 Staging all changes..."
+    git add -A
+    local after_stage_count=$(git diff --cached --name-only | wc -l)
+    print_color $GREEN "✅ Staged $after_stage_count files for commit"
+    
+    # Show what will be committed
+    echo ""
+    print_color $CYAN "📝 Files to be committed:"
+    git diff --cached --name-only
+    
+    # Get commit message
+    echo ""
+    read -p "💬 Commit message (or press enter for auto-generated): " commit_msg
+    
+    if [[ -z "$commit_msg" ]]; then
+        # Auto-generate commit message based on changes
+        if [[ $untracked_count -gt 0 ]]; then
+            local first_file=$(git diff --cached --name-only | head -1)
+            commit_msg="Add $first_file"
+            if [[ $untracked_count -gt 1 ]]; then
+                commit_msg="Add $first_file and $((untracked_count-1)) more files"
+            fi
+        elif [[ $modified_count -gt 0 ]]; then
+            local first_file=$(git diff --cached --name-only | head -1)
+            commit_msg="Update $first_file"
+            if [[ $modified_count -gt 1 ]]; then
+                commit_msg="Update $first_file and $((modified_count-1)) more files"
+            fi
+        else
+            commit_msg="Update files"
+        fi
+        print_color $CYAN "🤖 Auto-generated message: $commit_msg"
+    fi
+    
+    # Commit changes
+    if git commit -m "$commit_msg"; then
+        print_color $GREEN "✅ Successfully committed: $commit_msg"
+        
+        # Ask about pushing
+        local remote_branch=$(git for-each-ref --format='%(upstream:short)' "$(git symbolic-ref -q HEAD)" 2>/dev/null)
+        if [[ -n "$remote_branch" ]]; then
+            read -p "🚀 Push to remote '$remote_branch'? (y/n): " push_choice
+            if [[ $push_choice == "y" ]]; then
+                if git push; then
+                    print_color $GREEN "✅ Changes pushed to remote successfully!"
+                else
+                    print_color $RED "❌ Failed to push changes"
+                fi
+            fi
+        else
+            print_color $YELLOW "ℹ️  No remote branch set. Use remote operations to add a remote."
+        fi
+    else
+        print_color $RED "❌ Commit failed"
+    fi
 }
 
 # GitHub authentication
@@ -453,48 +639,6 @@ remote_operations() {
     esac
 }
 
-# Commit with intelligent message generation
-smart_commit() {
-    if ! is_git_repo; then
-        print_color $RED "❌ Not a Git repository"
-        return 1
-    fi
-
-    # Show changes first
-    print_color $YELLOW "📋 Current changes:"
-    git status --short
-    
-    # Auto-generate commit message based on changes
-    local added_files=$(git diff --cached --name-only | wc -l)
-    local modified_files=$(git diff --name-only | wc -l)
-    
-    if [[ $added_files -gt 0 ]] || [[ $modified_files -gt 0 ]]; then
-        read -p "💬 Commit message (or press enter for auto-generated): " commit_msg
-        
-        if [[ -z "$commit_msg" ]]; then
-            # Auto-generate commit message
-            if [[ $added_files -gt 0 ]]; then
-                commit_msg="Add $(git diff --cached --name-only | head -1)"
-            else
-                commit_msg="Update $(git diff --name-only | head -1)"
-            fi
-            print_color $CYAN "🤖 Auto-generated message: $commit_msg"
-        fi
-        
-        git add .
-        git commit -m "$commit_msg"
-        print_color $GREEN "✅ Committed: $commit_msg"
-        
-        read -p "🚀 Push to remote? (y/n): " push_choice
-        if [[ $push_choice == "y" ]]; then
-            git push
-            print_color $GREEN "✅ Changes pushed to remote!"
-        fi
-    else
-        print_color $YELLOW "⚠️ No changes to commit"
-    fi
-}
-
 # View and manage .gitignore
 manage_gitignore() {
     if ! is_git_repo; then
@@ -547,11 +691,14 @@ main_menu() {
         print_color $PURPLE "🤖 Git Bot - Comprehensive Git Assistant"
         echo "=============================================="
         
+        # Show current directory info
+        print_color $CYAN "📂 Current directory: $(pwd)"
+        
         # Show current repo info if in git repo
         if is_git_repo; then
             current_branch=$(git branch --show-current)
             repo_name=$(basename $(git rev-parse --show-toplevel))
-            print_color $CYAN "📁 Repo: $repo_name | 🌿 Branch: $current_branch"
+            print_color $GREEN "📁 Repo: $repo_name | 🌿 Branch: $current_branch"
             
             # Show .gitignore status
             if has_gitignore; then
@@ -563,7 +710,7 @@ main_menu() {
             # Quick status
             check_changes
         else
-            print_color $YELLOW "📁 Not in a Git repository"
+            print_color $RED "📭 Not in a Git repository"
         fi
         
         echo ""
@@ -580,11 +727,12 @@ main_menu() {
         echo "10) 📜 View history"
         echo "11) 🆕 Initialize new repository"
         echo "12) 📁 Manage .gitignore"
-        echo "13) 🔐 Re-authenticate GitHub"
-        echo "14) 🚪 Exit"
+        echo "13) 📂 Navigate to repository"
+        echo "14) 🔐 Re-authenticate GitHub"
+        echo "15) 🚪 Exit"
         echo ""
         
-        read -p "💭 Choose option (1-14): " main_choice
+        read -p "💭 Choose option (1-15): " main_choice
 
         case $main_choice in
             1) check_changes ;;
@@ -633,8 +781,9 @@ main_menu() {
                 ;;
             11) init_new_repo ;;
             12) manage_gitignore ;;
-            13) authenticate_github ;;
-            14) 
+            13) navigate_to_repo ;;
+            14) authenticate_github ;;
+            15) 
                 print_color $GREEN "👋 Goodbye!"
                 exit 0
                 ;;
